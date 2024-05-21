@@ -25,6 +25,7 @@
 #include "libavutil/opt.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/frame.h"
+#include "libavutil/mem.h"
 
 #include "libndi_newtek_common.h"
 
