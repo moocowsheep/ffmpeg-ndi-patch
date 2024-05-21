@@ -11,23 +11,13 @@ Reminder, the called headers files from NDI SDK are under MIT license.
 ## Usage :
 
 ``` bash
-git clone https://framagit.org/tytan652/ffmpeg-ndi-patch.git
-git clone https://git.ffmpeg.org/ffmpeg.git
+git clone https://github.com/moocowsheep/ffmpeg-ndi-patch.git
+git clone -b n7.0 https://git.ffmpeg.org/ffmpeg.git
 cd ffmpeg
-
-# Checkout to 4.2 version or later
-git checkout n4.4
 
 # Apply the patch
 
-#For 4.2.x or 4.3.x versions
-git am ../ffmpeg-ndi-patch/4.2-4.3_Revert-lavd-Remove-libndi_newtek.patch
-
-#For 4.4.x versions
-git am ../ffmpeg-ndi-patch/4.4_Revert-lavd-Remove-libndi_newtek.patch
-
-#For 5.x and later versions
-git am ../ffmpeg-ndi-patch/master_Revert-lavd-Remove-libndi_newtek.patch
+patch -Np1 -i ../ffmpeg-ndi-patch/7.0-add-ndi.patch
 
 # Add needed files
 cp ../ffmpeg-ndi-patch/libavdevice/libndi_newtek_* libavdevice/
