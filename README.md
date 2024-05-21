@@ -3,7 +3,7 @@
 Just a patch that add NDI from Newtek back in [FFmpeg](http://ffmpeg.org/). Newtek distributed FFmpeg compiled with non-free component infringing FFmpeg's license, then FFmpeg team decide to remove NDI protocol from it. ([source](https://trac.ffmpeg.org/ticket/7589))
 This patch adds it back. Remember don't distribute a FFmpeg package with non-free enabled.
 
-Forked from Tytan652.
+Forked from Tytan652 and refactored to support FFmpeg 7.0 and the latest NDI 6.0 version.
 
 The patch file modifies FFmpeg code, and other files are added to it.
 Then the licensing of those files will be and should be the same as [FFmpeg](https://git.ffmpeg.org/gitweb/ffmpeg.git/blob/HEAD:/LICENSE.md).
