@@ -19,7 +19,7 @@ cd ffmpeg
 
 # Apply the patch
 
-patch -Np1 -i ../ffmpeg-ndi-patch/7.1.1_add_ndi.patch
+patch -Np1 -i ../ffmpeg-ndi-patch/7.1.1-add_ndi.patch
 
 # Add needed files
 cp ../ffmpeg-ndi-patch/libavdevice/libndi_newtek_* libavdevice/
