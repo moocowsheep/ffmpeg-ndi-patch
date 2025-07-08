@@ -1,0 +1,390 @@
+From 8b1bdb8a3cc79c70f481a1a6641bd84ec0ccaff4 Mon Sep 17 00:00:00 2001
+From: James Almer <jamrial@gmail.com>
+Date: Mon, 19 Sep 2022 09:18:15 -0300
+Subject: [PATCH 1/4] avformat/mpegtsenc: store extradata in the stream private
+ context
+
+This is in preparation for the following patch, which will replace it with
+new extradata propagated in packets.
+
+Signed-off-by: James Almer <jamrial@gmail.com>
+---
+ libavformat/mpegtsenc.c | 60 ++++++++++++++++++++++++-----------------
+ 1 file changed, 35 insertions(+), 25 deletions(-)
+
+diff --git a/libavformat/mpegtsenc.c b/libavformat/mpegtsenc.c
+index 5148a6aecd2c1..010502b2bfb0b 100644
+--- a/libavformat/mpegtsenc.c
++++ b/libavformat/mpegtsenc.c
+@@ -255,6 +255,8 @@ typedef struct MpegTSWriteStream {
+     int64_t payload_dts;
+     int payload_flags;
+     uint8_t *payload;
++    uint8_t *extradata;
++    size_t extradata_size;
+     AVFormatContext *amux;
+     int data_st_warning;
+ 
+@@ -620,12 +622,12 @@ static int mpegts_write_pmt(AVFormatContext *s, MpegTSService *service)
+                 *q++ = 2;
+                 *q++ = 0x80;
+ 
+-                if (st->codecpar->extradata && st->codecpar->extradata_size >= 19) {
+-                    if (st->codecpar->extradata[18] == 0 && ch <= 2) {
++                if (ts_st->extradata && ts_st->extradata_size >= 19) {
++                    if (ts_st->extradata[18] == 0 && ch <= 2) {
+                         /* RTP mapping family */
+                         *q++ = ch;
+-                    } else if (st->codecpar->extradata[18] == 1 && ch <= 8 &&
+-                               st->codecpar->extradata_size >= 21 + ch) {
++                    } else if (ts_st->extradata[18] == 1 && ch <= 8 &&
++                               ts_st->extradata_size >= 21 + ch) {
+                         static const uint8_t coupled_stream_counts[9] = {
+                             1, 0, 1, 1, 2, 2, 2, 3, 3
+                         };
+@@ -651,13 +653,13 @@ static int mpegts_write_pmt(AVFormatContext *s, MpegTSService *service)
+                         };
+                         /* Vorbis mapping family */
+ 
+-                        if (st->codecpar->extradata[19] == ch - coupled_stream_counts[ch] &&
+-                            st->codecpar->extradata[20] == coupled_stream_counts[ch] &&
+-                            memcmp(&st->codecpar->extradata[21], channel_map_a[ch - 1], ch) == 0) {
++                        if (ts_st->extradata[19] == ch - coupled_stream_counts[ch] &&
++                            ts_st->extradata[20] == coupled_stream_counts[ch] &&
++                            memcmp(&ts_st->extradata[21], channel_map_a[ch - 1], ch) == 0) {
+                             *q++ = ch;
+-                        } else if (ch >= 2 && st->codecpar->extradata[19] == ch &&
+-                                   st->codecpar->extradata[20] == 0 &&
+-                                   memcmp(&st->codecpar->extradata[21], channel_map_b[ch - 1], ch) == 0) {
++                        } else if (ch >= 2 && ts_st->extradata[19] == ch &&
++                                   ts_st->extradata[20] == 0 &&
++                                   memcmp(&ts_st->extradata[21], channel_map_b[ch - 1], ch) == 0) {
+                             *q++ = ch | 0x80;
+                         } else {
+                             /* Unsupported, could write an extended descriptor here */
+@@ -666,7 +668,7 @@ static int mpegts_write_pmt(AVFormatContext *s, MpegTSService *service)
+                         }
+                     } else {
+                         /* Unsupported */
+-                        av_log(s, AV_LOG_ERROR, "Unsupported Opus channel mapping for family %d", st->codecpar->extradata[18]);
++                        av_log(s, AV_LOG_ERROR, "Unsupported Opus channel mapping for family %d", ts_st->extradata[18]);
+                         *q++ = 0xff;
+                     }
+                 } else if (ch <= 2) {
+@@ -739,9 +741,9 @@ static int mpegts_write_pmt(AVFormatContext *s, MpegTSService *service)
+                    if (*language != '\0')
+                        language++;
+ 
+-                   if (st->codecpar->extradata_size - extradata_copied >= 5) {
+-                       *q++ = st->codecpar->extradata[extradata_copied + 4]; /* subtitling_type */
+-                       memcpy(q, st->codecpar->extradata + extradata_copied, 4); /* composition_page_id and ancillary_page_id */
++                   if (ts_st->extradata_size - extradata_copied >= 5) {
++                       *q++ = ts_st->extradata[extradata_copied + 4]; /* subtitling_type */
++                       memcpy(q, ts_st->extradata + extradata_copied, 4); /* composition_page_id and ancillary_page_id */
+                        extradata_copied += 5;
+                        q += 4;
+                    } else {
+@@ -749,9 +751,9 @@ static int mpegts_write_pmt(AVFormatContext *s, MpegTSService *service)
+                         * 0x10 - normal with no monitor aspect ratio criticality
+                         * 0x20 - for the hard of hearing with no monitor aspect ratio criticality */
+                        *q++ = (st->disposition & AV_DISPOSITION_HEARING_IMPAIRED) ? 0x20 : 0x10;
+-                       if ((st->codecpar->extradata_size == 4) && (extradata_copied == 0)) {
++                       if ((ts_st->extradata_size == 4) && (extradata_copied == 0)) {
+                            /* support of old 4-byte extradata format */
+-                           memcpy(q, st->codecpar->extradata, 4); /* composition_page_id and ancillary_page_id */
++                           memcpy(q, ts_st->extradata, 4); /* composition_page_id and ancillary_page_id */
+                            extradata_copied += 4;
+                            q += 4;
+                        } else {
+@@ -778,8 +780,8 @@ static int mpegts_write_pmt(AVFormatContext *s, MpegTSService *service)
+                    if (*language != '\0')
+                        language++;
+ 
+-                   if (st->codecpar->extradata_size - 1 > extradata_copied) {
+-                       memcpy(q, st->codecpar->extradata + extradata_copied, 2);
++                   if (ts_st->extradata_size - 1 > extradata_copied) {
++                       memcpy(q, ts_st->extradata + extradata_copied, 2);
+                        extradata_copied += 2;
+                        q += 2;
+                    } else {
+@@ -1178,6 +1180,13 @@ static int mpegts_init(AVFormatContext *s)
+             return AVERROR(ENOMEM);
+         }
+ 
++        if (st->codecpar->extradata_size) {
++            ts_st->extradata = av_memdup(st->codecpar->extradata, st->codecpar->extradata_size);
++            if (!ts_st->extradata)
++                return AVERROR(ENOMEM);
++            ts_st->extradata_size = st->codecpar->extradata_size;
++        }
++
+         /* MPEG pid values < 16 are reserved. Applications which set st->id in
+          * this range are assigned a calculated pid. */
+         if (st->id < 16) {
+@@ -1242,7 +1251,7 @@ static int mpegts_init(AVFormatContext *s)
+         ts_st->cc              = 15;
+         ts_st->discontinuity   = ts->flags & MPEGTS_FLAG_DISCONT;
+         if (st->codecpar->codec_id == AV_CODEC_ID_AAC &&
+-            st->codecpar->extradata_size > 0) {
++            ts_st->extradata_size > 0) {
+             AVStream *ast;
+             ts_st->amux = avformat_alloc_context();
+             if (!ts_st->amux) {
+@@ -1902,12 +1911,12 @@ static int mpegts_write_packet_internal(AVFormatContext *s, AVPacket *pkt)
+         const uint8_t *found_aud = NULL, *found_aud_end = NULL;
+         int nal_type;
+         uint32_t state = -1;
+-        int extradd = (pkt->flags & AV_PKT_FLAG_KEY) ? st->codecpar->extradata_size : 0;
++        int extradd = (pkt->flags & AV_PKT_FLAG_KEY) ? ts_st->extradata_size : 0;
+         int ret = ff_check_h264_startcode(s, st, pkt);
+         if (ret < 0)
+             return ret;
+ 
+-        if (extradd && AV_RB24(st->codecpar->extradata) > 1)
++        if (extradd && AV_RB24(ts_st->extradata) > 1)
+             extradd = 0;
+ 
+         do {
+@@ -1955,7 +1964,7 @@ static int mpegts_write_packet_internal(AVFormatContext *s, AVPacket *pkt)
+             bytestream2_init_writer(&pb, data, new_pkt_size);
+             bytestream2_put_byte(&pb, 0x00);
+             bytestream2_put_buffer(&pb, found_aud, found_aud_end - found_aud);
+-            bytestream2_put_buffer(&pb, st->codecpar->extradata, extradd);
++            bytestream2_put_buffer(&pb, ts_st->extradata, extradd);
+             bytestream2_put_buffer(&pb, pkt->data, found_aud - pkt->data);
+             bytestream2_put_buffer(&pb, found_aud_end, buf_end - found_aud_end);
+             av_assert0(new_pkt_size == bytestream2_tell_p(&pb));
+@@ -1999,12 +2008,12 @@ static int mpegts_write_packet_internal(AVFormatContext *s, AVPacket *pkt)
+         const uint8_t *p = buf, *buf_end = p + size;
+         uint32_t state = -1;
+         int nal_type;
+-        int extradd = (pkt->flags & AV_PKT_FLAG_KEY) ? st->codecpar->extradata_size : 0;
++        int extradd = (pkt->flags & AV_PKT_FLAG_KEY) ? ts_st->extradata_size : 0;
+         int ret = check_h26x_startcode(s, st, pkt, "hevc");
+         if (ret < 0)
+             return ret;
+ 
+-        if (extradd && AV_RB24(st->codecpar->extradata) > 1)
++        if (extradd && AV_RB24(ts_st->extradata) > 1)
+             extradd = 0;
+ 
+         do {
+@@ -2286,6 +2295,7 @@ static void mpegts_deinit(AVFormatContext *s)
+         if (ts_st) {
+             av_freep(&ts_st->dvb_ac3_desc);
+             av_freep(&ts_st->payload);
++            av_freep(&ts_st->extradata);
+             if (ts_st->amux) {
+                 avformat_free_context(ts_st->amux);
+                 ts_st->amux = NULL;
+
+From 5c4cdb320bd6e7e01dee18570340a3d73b4c8040 Mon Sep 17 00:00:00 2001
+From: James Almer <jamrial@gmail.com>
+Date: Mon, 19 Sep 2022 09:19:45 -0300
+Subject: [PATCH 2/4] avformat/mpegtsenc: look for extradata updates in input
+ packets
+
+This ensures the correct information is written in PES packets in case extradata
+changes mid stream, or if extradata is not available at init().
+
+Signed-off-by: James Almer <jamrial@gmail.com>
+---
+ libavformat/mpegtsenc.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/libavformat/mpegtsenc.c b/libavformat/mpegtsenc.c
+index 010502b2bfb0b..596ed4bdc759d 100644
+--- a/libavformat/mpegtsenc.c
++++ b/libavformat/mpegtsenc.c
+@@ -1879,6 +1879,15 @@ static int mpegts_write_packet_internal(AVFormatContext *s, AVPacket *pkt)
+     if (side_data)
+         stream_id = side_data[0];
+ 
++    side_data = av_packet_get_side_data(pkt,
++                                        AV_PKT_DATA_NEW_EXTRADATA,
++                                        &side_data_size);
++    if (side_data) {
++        av_free(ts_st->extradata);
++        ts_st->extradata = av_memdup(side_data, side_data_size);
++        ts_st->extradata_size = side_data_size;
++    }
++
+     if (!ts->first_dts_checked && dts != AV_NOPTS_VALUE) {
+         ts->first_pcr += dts * 300;
+         ts->first_dts_checked = 1;
+
+From 3693e78e942ba8d0edff921285420cd5d23e2f99 Mon Sep 17 00:00:00 2001
+From: James Almer <jamrial@gmail.com>
+Date: Mon, 19 Sep 2022 09:03:46 -0300
+Subject: [PATCH 3/4] avformat/mpegtsenc: add experimental support for muxing
+ AV1 streams
+
+Signed-off-by: James Almer <jamrial@gmail.com>
+---
+ libavformat/mpegtsenc.c | 61 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 61 insertions(+)
+
+diff --git a/libavformat/mpegtsenc.c b/libavformat/mpegtsenc.c
+index 596ed4bdc759d..cc64712e157ba 100644
+--- a/libavformat/mpegtsenc.c
++++ b/libavformat/mpegtsenc.c
+@@ -27,15 +27,17 @@
+ #include "libavutil/mathematics.h"
+ #include "libavutil/mem.h"
+ #include "libavutil/opt.h"
++#include "libavutil/pixdesc.h"
+ 
+ #include "libavcodec/ac3_parser_internal.h"
+ #include "libavcodec/bytestream.h"
+ #include "libavcodec/defs.h"
+ #include "libavcodec/h264.h"
+ #include "libavcodec/hevc/hevc.h"
+ #include "libavcodec/vvc.h"
+ #include "libavcodec/startcode.h"
+ 
++#include "av1.h"
+ #include "avformat.h"
+ #include "avio_internal.h"
+ #include "internal.h"
+@@ -358,6 +360,9 @@ static int get_dvb_stream_type(AVFormatContext *s, AVStream *st)
+     int stream_type;
+ 
+     switch (st->codecpar->codec_id) {
++    case AV_CODEC_ID_AV1:
++        stream_type = STREAM_TYPE_PRIVATE_DATA;
++        break;
+     case AV_CODEC_ID_MPEG1VIDEO:
+     case AV_CODEC_ID_MPEG2VIDEO:
+         stream_type = STREAM_TYPE_VIDEO_MPEG2;
+@@ -461,6 +466,9 @@ static int get_m2ts_stream_type(AVFormatContext *s, AVStream *st)
+     MpegTSWriteStream *ts_st = st->priv_data;
+ 
+     switch (st->codecpar->codec_id) {
++    case AV_CODEC_ID_AV1:
++        stream_type = STREAM_TYPE_PRIVATE_DATA;
++        break;
+     case AV_CODEC_ID_MPEG2VIDEO:
+         stream_type = STREAM_TYPE_VIDEO_MPEG2;
+         break;
+@@ -805,6 +813,47 @@ static int mpegts_write_pmt(AVFormatContext *s, MpegTSService *service)
+                 put_registration_descriptor(&q, MKTAG('V', 'C', '-', '1'));
+             } else if (stream_type == STREAM_TYPE_VIDEO_HEVC && s->strict_std_compliance <= FF_COMPLIANCE_NORMAL) {
+                 put_registration_descriptor(&q, MKTAG('H', 'E', 'V', 'C'));
++            } else if (codec_id == AV_CODEC_ID_AV1) {
++                FFIOContext pb;
++                uint8_t buf[4];
++
++                /* 6 bytes registration descriptor, 10 bytes AV1 descriptor */
++                if (q - data > SECTION_LENGTH - 6 - 10) {
++                    err = 1;
++                    break;
++                }
++
++                put_registration_descriptor(&q, MKTAG('A', 'V', '0', '1'));
++
++               /* The descriptor tag */
++               *q++ = 0x5F;
++               *q++ = 8;
++
++               /* private_data_specifier */
++               // FIXME, not defined in spec
++               put16(&q, 0);
++               put16(&q, 0);
++
++               ffio_init_context(&pb, buf, sizeof(buf),
++                                 1, NULL, NULL, NULL, NULL);
++
++               if ((ts_st->extradata_size < sizeof(buf)) ||
++                   ff_isom_write_av1c(&pb.pub, ts_st->extradata, sizeof(buf), 0) < 0) {
++                   // Derive values from st->codecpar if no extradata is present
++                   const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(st->codecpar->format);
++                   *q++ = 0x81; // marker, version
++                   *q++ = (st->codecpar->profile << 5) | (st->codecpar->level & 0x1F);
++                   *q++ = desc ? ((desc->comp[0].depth > 8)  << 6) | ((desc->comp[0].depth == 12) << 5) |
++                                 ((desc->nb_components == 1) << 4) |  (desc->log2_chroma_w        << 3) |
++                                  (desc->log2_chroma_h       << 2) : 0;
++                   *q++ = 3 << 6; // hdr_wcg_idc;
++                   break;
++               }
++
++               *q++ = buf[0];
++               *q++ = buf[1];
++               *q++ = buf[2];
++               *q++ = buf[3] | (3 << 6); // hdr_wcg_idc;
+             } else if (stream_type == STREAM_TYPE_VIDEO_CAVS || stream_type == STREAM_TYPE_VIDEO_AVS2 ||
+                        stream_type == STREAM_TYPE_VIDEO_AVS3) {
+                 put_registration_descriptor(&q, MKTAG('A', 'V', 'S', 'V'));
+@@ -1451,6 +1500,8 @@ static int get_pes_stream_id(AVFormatContext *s, AVStream *st, int stream_id, in
+     if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+         if (st->codecpar->codec_id == AV_CODEC_ID_DIRAC)
+             return STREAM_ID_EXTENDED_STREAM_ID;
++        else if (st->codecpar->codec_id == AV_CODEC_ID_AV1)
++            return STREAM_ID_PRIVATE_STREAM_1;
+         else
+             return STREAM_ID_VIDEO_STREAM_0;
+     } else if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO &&
+@@ -2061,6 +2112,16 @@ static int mpegts_write_packet_internal(AVFormatContext *s, AVPacket *pkt)
+             if (!data)
+                 return AVERROR(ENOMEM);
+       }
++    } else if (st->codecpar->codec_id == AV_CODEC_ID_AV1) {
++        int off;
++        int ret = ff_av1_filter_obus_buf(buf, &data, &size, &off);
++        if (ret < 0)
++            return ret;
++        if (buf == data) {
++            buf += off;
++            data = NULL;
++        } else
++            buf = data;
+     } else if (st->codecpar->codec_id == AV_CODEC_ID_OPUS) {
+         if (pkt->size < 2) {
+             av_log(s, AV_LOG_ERROR, "Opus packet too short\n");
+
+From 5f74d50cf91cfd057c519310f1f0893a282c04e3 Mon Sep 17 00:00:00 2001
+From: James Almer <jamrial@gmail.com>
+Date: Mon, 26 Sep 2022 10:26:38 -0300
+Subject: [PATCH 4/4] avformat/mpegts: add experimental support for demuxing
+ AV1 streams
+
+Signed-off-by: James Almer <jamrial@gmail.com>
+---
+ libavformat/mpegts.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/libavformat/mpegts.c b/libavformat/mpegts.c
+index d97702fcd7d11..3935acc7b5261 100644
+--- a/libavformat/mpegts.c
++++ b/libavformat/mpegts.c
+@@ -876,6 +876,7 @@ static const StreamType REGD_types[] = {
+     { MKTAG('I', 'D', '3', ' '), AVMEDIA_TYPE_DATA,  AV_CODEC_ID_TIMED_ID3 },
+     { MKTAG('V', 'C', '-', '1'), AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_VC1   },
+     { MKTAG('O', 'p', 'u', 's'), AVMEDIA_TYPE_AUDIO, AV_CODEC_ID_OPUS  },
++    { MKTAG('A', 'V', '0', '1'), AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_AV1   },
+     { 0 },
+ };
+ 
+@@ -2039,6 +2040,23 @@ int ff_parse_mpeg2_descriptor(AVFormatContext *fc, AVStream *st, int stream_type
+                 mpegts_find_stream_type(st, st->codecpar->codec_tag, METADATA_types);
+         }
+         break;
++    case 0x5f: /* AV1 descriptor */
++        if (!st->codecpar->extradata) {
++            st->codecpar->extradata = av_mallocz(4 + AV_INPUT_BUFFER_PADDING_SIZE);
++            if (!st->codecpar->extradata)
++                return AVERROR(ENOMEM);
++
++            /* private_data_specifier */
++            get16(pp, desc_end);
++            get16(pp, desc_end);
++            st->codecpar->extradata[0] = get8(pp, desc_end);
++            st->codecpar->extradata[1] = get8(pp, desc_end);
++            st->codecpar->extradata[2] = get8(pp, desc_end);
++            st->codecpar->extradata[3] = get8(pp, desc_end) & 0x3f;
++            st->codecpar->extradata_size = 4;
++            sti->need_context_update = 1;
++        }
++        break;
+     case 0x7f: /* DVB extension descriptor */
+         ext_desc_tag = get8(pp, desc_end);
+         if (ext_desc_tag < 0)
