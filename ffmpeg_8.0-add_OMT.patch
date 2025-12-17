@@ -1,0 +1,1346 @@
+From 8d0f91446d24eb09f0fc6dafcacf74d669607e74 Mon Sep 17 00:00:00 2001
+From: GalleryUK <opensource@gallery.co.uk>
+Date: Sun, 12 Oct 2025 12:35:34 +0100
+Subject: [PATCH] Add new feature: Add OpenMediaTransport Support
+
+Signed-off-by: GalleryUK <opensource@gallery.co.uk>
+---
+ configure                   |   7 +
+ doc/indevs.texi             |  42 +++
+ doc/outdevs.texi            |  41 +++
+ libavdevice/Makefile        |   2 +
+ libavdevice/alldevices.c    |   2 +
+ libavdevice/libomt_common.h |  30 ++
+ libavdevice/libomt_dec.c    | 476 +++++++++++++++++++++++++++
+ libavdevice/libomt_enc.c    | 629 ++++++++++++++++++++++++++++++++++++
+ 8 files changed, 1229 insertions(+)
+ create mode 100644 libavdevice/libomt_common.h
+ create mode 100644 libavdevice/libomt_dec.c
+ create mode 100644 libavdevice/libomt_enc.c
+
+diff --git a/configure b/configure
+index 7828381b5d..e70493fb6a 100755
+--- a/configure
++++ b/configure
+@@ -320,6 +320,7 @@ External library support:
+   --enable-lv2             enable LV2 audio filtering [no]
+   --disable-lzma           disable lzma [autodetect]
+   --enable-decklink        enable Blackmagic DeckLink I/O support [no]
++  --enable-libomt		   enable OpenMediaTransport I/O support [no]
+   --enable-mbedtls         enable mbedTLS, needed for https support
+                            if openssl, gnutls or libtls is not used [no]
+   --enable-mediacodec      enable Android MediaCodec support [no]
+@@ -2041,6 +2042,7 @@ EXTERNAL_LIBRARY_LIST="
+     vapoursynth
+     vulkan_static
+     whisper
++    libomt
+ "
+ 
+ HWACCEL_AUTODETECT_LIBRARY_LIST="
+@@ -3859,6 +3861,10 @@ decklink_indev_suggest="libzvbi"
+ decklink_outdev_deps="decklink threads"
+ decklink_outdev_suggest="libklvanc"
+ decklink_outdev_extralibs="-lstdc++"
++libomt_indev_deps="libomt"
++libomt_indev_extralibs="-lomt"
++libomt_outdev_deps="libomt"
++libomt_outdev_extralibs="-lomt"
+ dshow_indev_deps="IBaseFilter"
+ dshow_indev_extralibs="-lpsapi -lole32 -lstrmiids -luuid -loleaut32 -lshlwapi"
+ fbdev_indev_deps="linux_fb_h"
+@@ -7090,6 +7096,7 @@ enabled chromaprint       && { check_pkg_config chromaprint libchromaprint "chro
+                                require chromaprint chromaprint.h chromaprint_get_version -lchromaprint; }
+ enabled decklink          && { require_headers DeckLinkAPI.h &&
+                                { test_cpp_condition DeckLinkAPIVersion.h "BLACKMAGIC_DECKLINK_API_VERSION >= 0x0a0b0000" || die "ERROR: Decklink API version must be >= 10.11"; } }
++enabled libomt            && require_headers libomt.h
+ enabled frei0r            && require_headers "frei0r.h"
+ enabled gmp               && require gmp gmp.h mpz_export -lgmp
+ enabled gnutls            && require_pkg_config gnutls gnutls gnutls/gnutls.h gnutls_global_init
+diff --git a/doc/indevs.texi b/doc/indevs.texi
+index 8822e070fe..3e1e966ed5 100644
+--- a/doc/indevs.texi
++++ b/doc/indevs.texi
+@@ -458,6 +458,48 @@ ffmpeg -channels 16 -format_code Hi50 -f decklink -i 'UltraStudio Mini Recorder'
+ 
+ @end itemize
+ 
++
++@section libomt
++
++The libomt input device provides capture capabilities for using OMT (OpenMediaTransport).
++
++Input filename is a full OMT source name  in the form : HOST (sourcename)
++To enable this input device, you need the OMT SDK libraries libomt and libvpx and header libomt.h and you
++need to configure with the appropriate @code{--extra-cflags}
++and @code{--extra-ldflags}.
++
++@subsection Options
++
++@table @option
++
++@item reference_level
++Set this to a value, typically 1.0 to set the float value for audio which represents 
++full scale deflection when converted to an integer.
++Defaults to @option{1.0}.
++
++
++@end table
++
++@subsection Examples
++
++@itemize
++
++@item
++Restream to OMT:
++@example
++ffmpeg -f libomt -i "DEV-5.INTERNAL.M1STEREO.TV (OMT_SOURCE_NAME_1)" -f libomt OMT_SOURCE_NAME_2
++@end example
++
++@item
++Restream remote OMT to local OMT:
++@example
++ffmpeg -f libomt -i "MYOMTDEVICE (OMT_SOURCE_NAME_1)" -f libomt OMT_SOURCE_NAME_2
++@end example
++
++
++@end itemize
++
++
+ @section dshow
+ 
+ Windows DirectShow input device.
+diff --git a/doc/outdevs.texi b/doc/outdevs.texi
+index 86c78f31b7..bf57d0ccee 100644
+--- a/doc/outdevs.texi
++++ b/doc/outdevs.texi
+@@ -272,6 +272,47 @@ ffmpeg -i test.avi -f decklink -pix_fmt uyvy422 -s 720x486 -r 24000/1001 'DeckLi
+ 
+ @end itemize
+ 
++@section libomt
++
++The libomt output device provides playback capabilities for using OMT (OpenMediaTransport).
++
++Output filename is an OMT name.
++
++To enable this output device, you need the OMT SDK libraries libomt and libvpx and header libomt.h and you
++need to configure with the appropriate @code{--extra-cflags}
++and @code{--extra-ldflags}.
++
++OMT uses uyvy422 pixel format natively, but also supports bgra
++
++@subsection Options
++
++@table @option
++
++@item reference_level
++Set this to a value, typically 1.0 to set the float value for audio which represents 
++full scale deflection when converted from an integer.
++Defaults to @option{1.0}.
++
++@item clock_output
++These specify whether OMT "clocks" itself.
++Defaults to @option{false}.
++
++
++@end table
++
++@subsection Examples
++
++@itemize
++
++@item
++Play video clip:
++@example
++ffmpeg -i "udp://@@239.1.1.1:10480?fifo_size=1000000&overrun_nonfatal=1" -vf "scale=720:576,fps=fps=25,setdar=dar=16/9,format=pix_fmts=uyvy422" -f libomt NEW_OMT1
++@end example
++
++@end itemize
++
++
+ @section fbdev
+ 
+ Linux framebuffer output device.
+diff --git a/libavdevice/Makefile b/libavdevice/Makefile
+index a226368d16..f8bbc951a7 100644
+--- a/libavdevice/Makefile
++++ b/libavdevice/Makefile
+@@ -21,6 +21,8 @@ OBJS-$(CONFIG_AVFOUNDATION_INDEV)        += avfoundation.o
+ OBJS-$(CONFIG_CACA_OUTDEV)               += caca.o
+ OBJS-$(CONFIG_DECKLINK_OUTDEV)           += decklink_enc.o decklink_enc_c.o decklink_common.o
+ OBJS-$(CONFIG_DECKLINK_INDEV)            += decklink_dec.o decklink_dec_c.o decklink_common.o
++OBJS-$(CONFIG_LIBOMT_OUTDEV)    		 += libomt_enc.o
++OBJS-$(CONFIG_LIBOMT_INDEV)      		 += libomt_dec.o
+ OBJS-$(CONFIG_DSHOW_INDEV)               += dshow_crossbar.o dshow.o dshow_enummediatypes.o \
+                                             dshow_enumpins.o dshow_filter.o \
+                                             dshow_pin.o dshow_common.o
+diff --git a/libavdevice/alldevices.c b/libavdevice/alldevices.c
+index 573595f416..e3a2544279 100644
+--- a/libavdevice/alldevices.c
++++ b/libavdevice/alldevices.c
+@@ -35,6 +35,8 @@ extern const FFInputFormat  ff_avfoundation_demuxer;
+ extern const FFOutputFormat ff_caca_muxer;
+ extern const FFInputFormat  ff_decklink_demuxer;
+ extern const FFOutputFormat ff_decklink_muxer;
++extern const FFInputFormat  ff_libomt_demuxer;
++extern const FFOutputFormat ff_libomt_muxer;
+ extern const FFInputFormat  ff_dshow_demuxer;
+ extern const FFInputFormat  ff_fbdev_demuxer;
+ extern const FFOutputFormat ff_fbdev_muxer;
+diff --git a/libavdevice/libomt_common.h b/libavdevice/libomt_common.h
+new file mode 100644
+index 0000000000..de4162bc36
+--- /dev/null
++++ b/libavdevice/libomt_common.h
+@@ -0,0 +1,30 @@
++/*
++ * libOMT  common code
++ * Copyright (c) 2025 Open Media Transport Contributors <omt@gallery.co.uk>
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#ifndef AVDEVICE_LIBOMT_COMMON_H
++#define AVDEVICE_LIBOMT_COMMON_H
++
++#include "libomt.h"
++
++#define OMT_TIME_BASE 10000000
++#define OMT_TIME_BASE_Q (AVRational){1, OMT_TIME_BASE}
++
++#endif
+diff --git a/libavdevice/libomt_dec.c b/libavdevice/libomt_dec.c
+new file mode 100644
+index 0000000000..d26cdb4013
+--- /dev/null
++++ b/libavdevice/libomt_dec.c
+@@ -0,0 +1,476 @@
++/*
++ * libOMT  demuxer
++ * Copyright (c) 2025 Open Media Transport Contributors <omt@gallery.co.uk>
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "libavformat/avformat.h"
++#include "libavutil/opt.h"
++#include "libavutil/imgutils.h"
++#include "libavutil/log.h"    
++#include "libomt_common.h"
++#include "libavutil/channel_layout.h"
++#include "libavutil/internal.h"
++#include "libavutil/mathematics.h"
++#include "libavutil/opt.h"
++#include "libavutil/time.h"
++#include "libavformat/demux.h"
++#include "libavformat/internal.h"
++#include "avdevice.h"
++#include "libavdevice/version.h"
++#include "libavutil/mem.h"
++
++#include <unistd.h>
++
++struct OMTContext {
++    const AVClass *class;  // MUST be first field for AVOptions!
++    float reference_level;
++    int find_sources;
++    int tenbit;
++    int nativevmx;
++    omt_receive_t *recv;    
++    AVStream *video_st, *audio_st;
++};
++
++static void convert_p216_to_yuv422p10le(uint16_t* src_p216,  int linesizeP216, uint16_t* tgt_y,  uint16_t* tgt_cb,  uint16_t* tgt_cr,  int width, int height)
++{
++    int y;
++    int sourceYOffset,sourceUVOffset, targetYOffset, targetUVOffset;
++    uint16_t *ylocal = tgt_y;
++    uint16_t *ulocal = tgt_cb;
++    uint16_t *vlocal = tgt_cr;
++       
++    sourceUVOffset =  height * linesizeP216;
++    sourceYOffset = 0;
++    targetYOffset = 0;
++    targetUVOffset = 0; 
++    
++    /* LUMA FIRST */
++    for (y=0;y<height*width;y+=2) {
++        ylocal[targetYOffset++] = (src_p216[sourceYOffset++]) >> 6;
++        ylocal[targetYOffset++] = (src_p216[sourceYOffset++]) >> 6;
++    }
++    
++    /* CHROMA */
++    sourceUVOffset =  height * width;
++    targetUVOffset = 0;
++    for (y=0;y<height*width;y+=2) {
++        ulocal[targetUVOffset] = (src_p216[sourceUVOffset++]) >> 6;
++        vlocal[targetUVOffset++] = (src_p216[sourceUVOffset++]) >> 6;
++    }
++    
++    return;
++}
++
++
++
++static int omt_set_video_packet(AVFormatContext *avctx, OMTMediaFrame *v, AVPacket *pkt)
++{
++
++    av_log(avctx, AV_LOG_DEBUG, "omt_set_video_packet %dx%d stride=%d\n",v->Width,v->Height,v->Stride);
++
++    int ret;
++    struct OMTContext *ctx = (struct OMTContext *)avctx->priv_data;
++
++    if (ctx->nativevmx && v->Codec == OMTCodec_VMX1)
++        ret = av_new_packet(pkt, v->CompressedLength);
++    else
++        ret = av_new_packet(pkt, v->Height * v->Stride);
++    
++    if (ret < 0) {
++        av_log(avctx, AV_LOG_ERROR, "omt_set_video_packet av_new_packet failed error %d\n",ret);
++        return ret;
++    }
++    
++    pkt->dts = pkt->pts = av_rescale_q(v->Timestamp, OMT_TIME_BASE_Q, ctx->video_st->time_base);
++    pkt->duration = av_rescale_q(1, (AVRational){v->FrameRateD, v->FrameRateN}, ctx->video_st->time_base);
++
++    av_log(avctx, AV_LOG_DEBUG, "%s: pkt->dts = pkt->pts = %"PRId64", duration=%"PRId64", timecode=%"PRId64"\n",
++        __func__, pkt->dts, pkt->duration, v->Timestamp);
++
++    pkt->flags         |= AV_PKT_FLAG_KEY;
++    pkt->stream_index   = ctx->video_st->index;
++    
++    switch (v->Codec)
++    {
++        case OMTCodec_VMX1:
++            av_log(avctx, AV_LOG_DEBUG, "Got a native VMX Packet\n");
++            av_log(avctx, AV_LOG_DEBUG, "copy %d bytes of VMX into AVPacket\n",v->CompressedLength);
++            memcpy(pkt->data, v->CompressedData, v->CompressedLength);
++        break;
++        
++        case OMTCodec_UYVY:case OMTCodec_UYVA:case OMTCodec_BGRA:
++             memcpy(pkt->data, v->Data, pkt->size);
++        break;
++        
++        case OMTCodec_P216:case OMTCodec_PA16:
++        {
++            int uOff =  v->Stride * v->Height; 
++            int yOff = uOff+(v->Stride * v->Height >> 1) ; //2 bytes of every other pixel
++            convert_p216_to_yuv422p10le((uint16_t*)v->Data, v->Stride, (uint16_t*)pkt->data, (uint16_t*)((uint8_t*)pkt->data+uOff),  (uint16_t*)((uint8_t*)pkt->data+yOff), v->Width, v->Height);
++            av_log(avctx, AV_LOG_DEBUG, "convert_p216_to_yuv422p10le\n");
++        }
++        break;
++        
++        default:
++                 memcpy(pkt->data, v->Data, pkt->size);
++         break;
++    }
++    av_log(avctx, AV_LOG_DEBUG, "omt_set_video_packet memcpy %d bytes\n",pkt->size);
++    return 0;
++}
++
++
++static int    convertPlanarFloatToInterleavedShorts(float * floatData,int sourceChannels,int sourceSamplesPerChannel,uint8_t * outputData,float referenceLevel)
++{
++     /* Cast output to int16_t for easier assignment */
++    int16_t *out = (int16_t *)outputData;
++    /* For each sample across all channels */
++    for (int sampleIdx = 0; sampleIdx < sourceSamplesPerChannel; ++sampleIdx) {
++        for (int ch = 0; ch < sourceChannels; ++ch) {
++            /* Planar layout: [ch0][ch1][ch2]...
++            Each plane is sourceSamplesPerChannel floats */
++            float val = floatData[ch * sourceSamplesPerChannel + sampleIdx];
++            /* Scale by referenceLevel (assumed fullscale is +/-referenceLevel) */
++            float scaled = val / referenceLevel;
++            /* Clamp to [-1, 1] */
++            if (scaled > 1.0f) scaled = 1.0f;
++            else if (scaled < -1.0f) scaled = -1.0f;
++            /* Convert to int16_t range */
++            int16_t sample = (int16_t)lrintf(scaled * 32767.0f);
++            /* Interleaved output order */
++            out[sampleIdx * sourceChannels + ch] = sample;
++        }
++    }
++    /* Returns the total number of output bytes written */
++    return sourceSamplesPerChannel * sourceChannels * (int)sizeof(int16_t);
++}
++
++
++static int omt_set_audio_packet(AVFormatContext *avctx, OMTMediaFrame *a, AVPacket *pkt)
++{
++    av_log(avctx, AV_LOG_DEBUG, "omt_set_audio_packet \n");
++
++    int ret;
++    struct OMTContext *ctx = (struct OMTContext *)avctx->priv_data;
++    ret = av_new_packet(pkt, 2 * a->SamplesPerChannel * a->Channels);
++    if (ret < 0)
++        return ret;
++
++    pkt->dts = pkt->pts = av_rescale_q(a->Timestamp, OMT_TIME_BASE_Q, ctx->audio_st->time_base);
++    pkt->duration = av_rescale_q(1, (AVRational){a->SamplesPerChannel, a->SampleRate}, ctx->audio_st->time_base);
++
++    av_log(avctx, AV_LOG_DEBUG, "%s: pkt->dts = pkt->pts = %"PRId64", duration=%"PRId64", timecode=%"PRId64"\n",
++        __func__, pkt->dts, pkt->duration, a->Timestamp);
++
++    pkt->flags       |= AV_PKT_FLAG_KEY;
++    pkt->stream_index = ctx->audio_st->index;
++
++    convertPlanarFloatToInterleavedShorts(a->Data,a->Channels,a->SamplesPerChannel,pkt->data, ctx->reference_level);
++
++    return 0;
++}
++
++static int omt_find_sources(AVFormatContext *avctx, const char *name)
++{
++    int OMTcount = 0;
++    char **omtSources = NULL;
++    OMTcount = 0;
++    omtSources = omt_discovery_getaddresses(&OMTcount);
++	/* give it some time and check again */
++    usleep(1000000);
++    
++    OMTcount = 0;
++    omtSources = omt_discovery_getaddresses(&OMTcount);
++    if (OMTcount > 0) 
++    {
++        av_log(avctx, AV_LOG_INFO, "-------------- %d OMT Sources-------------\n",OMTcount);
++        for (int z=0;z<OMTcount > 0;z++) 
++            av_log(avctx, AV_LOG_INFO, "%s\n", omtSources[z]);
++        av_log(avctx, AV_LOG_INFO, "-------------------------------------------\n");
++    }
++    else
++    {
++        av_log(avctx, AV_LOG_INFO,"No OMT Sources found\n");
++    }
++    return 0;
++}
++
++
++
++
++static int omt_read_header(AVFormatContext *avctx)
++{
++
++    av_log(avctx, AV_LOG_DEBUG, "omt_read_header for URL=%s.\n",avctx->url);
++
++    const OMTTally tally_state = { .program = 1, .preview = 1 };
++    struct OMTContext *ctx = (struct OMTContext *)avctx->priv_data;
++    if (ctx->find_sources) {
++        omt_find_sources(avctx, avctx->url);
++        return  AVERROR(EIO);
++    }
++    
++    if (ctx->nativevmx) {
++        ctx->recv = omt_receive_create(avctx->url, (OMTFrameType)(OMTFrameType_Video | OMTFrameType_Audio | OMTFrameType_Metadata), (OMTPreferredVideoFormat)OMTPreferredVideoFormat_UYVYorUYVAorP216orPA16, (OMTReceiveFlags)OMTReceiveFlags_CompressedOnly);
++    }  
++    else {
++        if (ctx->tenbit)
++            ctx->recv = omt_receive_create(avctx->url, (OMTFrameType)(OMTFrameType_Video | OMTFrameType_Audio | OMTFrameType_Metadata), (OMTPreferredVideoFormat)OMTPreferredVideoFormat_UYVYorUYVAorP216orPA16, (OMTReceiveFlags)OMTReceiveFlags_None);
++        else
++            ctx->recv = omt_receive_create(avctx->url, (OMTFrameType)(OMTFrameType_Video | OMTFrameType_Audio | OMTFrameType_Metadata), (OMTPreferredVideoFormat)OMTPreferredVideoFormat_UYVYorBGRA, (OMTReceiveFlags)OMTReceiveFlags_None);
++    }
++    
++    if (!ctx->recv) {
++        av_log(avctx, AV_LOG_ERROR, "omt_receive_create failed.\n");
++        return AVERROR(EIO);
++    }
++
++    /* Set tally */
++    omt_receive_settally(ctx->recv, (OMTTally *)&tally_state);
++
++    avctx->ctx_flags |= AVFMTCTX_NOHEADER;
++
++    return 0; 
++}
++
++
++static int omt_create_video_stream(AVFormatContext *avctx, OMTMediaFrame *v)
++{
++
++    av_log(avctx, AV_LOG_DEBUG, "omt_create_video_stream \n");
++
++
++    AVStream *st;
++    AVRational tmp;
++    struct OMTContext *ctx = (struct OMTContext *)avctx->priv_data;
++    st = avformat_new_stream(avctx, NULL);
++    if (!st) {
++        av_log(avctx, AV_LOG_ERROR, "Cannot add video stream\n");
++        return AVERROR(ENOMEM);
++    }
++
++    st->time_base                   = OMT_TIME_BASE_Q;
++    st->r_frame_rate                = av_make_q(v->FrameRateN, v->FrameRateD);
++
++    tmp = av_mul_q(av_d2q(v->AspectRatio, INT_MAX), (AVRational){v->Height, v->Width});
++    av_reduce(&st->sample_aspect_ratio.num, &st->sample_aspect_ratio.den, tmp.num, tmp.den, 1000);
++    st->codecpar->sample_aspect_ratio = st->sample_aspect_ratio;
++
++    av_log(avctx, AV_LOG_DEBUG, "Video Stream frame_rate = %d/%d (approx %.3f fps)\n", 
++    st->r_frame_rate.num, st->r_frame_rate.den,
++    (double)st->r_frame_rate.num / st->r_frame_rate.den);
++    
++    av_log(avctx, AV_LOG_DEBUG, "Video Stream sample_aspect_ratio = %d/%d (approx %.3f)\n",
++       st->codecpar->sample_aspect_ratio.num,
++       st->codecpar->sample_aspect_ratio.den,
++       (double)st->codecpar->sample_aspect_ratio.num / st->codecpar->sample_aspect_ratio.den);
++       
++    st->codecpar->codec_type        = AVMEDIA_TYPE_VIDEO;
++    st->codecpar->width             = v->Width;
++    st->codecpar->height            = v->Height;
++    st->codecpar->codec_id          = AV_CODEC_ID_RAWVIDEO;
++    st->codecpar->bit_rate          = av_rescale(v->Width * v->Height * 16, v->FrameRateN, v->FrameRateD);
++    st->codecpar->field_order       = (v->Flags & OMTVideoFlags_Interlaced) ? AV_FIELD_TT : AV_FIELD_PROGRESSIVE;
++
++    switch(v->Codec)
++    {
++    
++        case OMTCodec_VMX1: 
++            st->codecpar->codec_id  = AV_CODEC_ID_VMIX;
++            st->codecpar->codec_tag  = MKTAG('V', 'M', 'X', '1');
++        break;
++        
++        case OMTCodec_UYVY:case OMTCodec_UYVA:
++            st->codecpar->format        = AV_PIX_FMT_UYVY422;
++            st->codecpar->codec_tag     = MKTAG('U', 'Y', 'V', 'Y');
++            if (OMTCodec_UYVA == v->Codec)
++                av_log(avctx, AV_LOG_WARNING, "Alpha channel ignored\n");
++        break;
++        
++        case OMTCodec_BGRA:
++            st->codecpar->format        = AV_PIX_FMT_BGRA;
++            st->codecpar->codec_tag     = MKTAG('B', 'G', 'R', 'A');
++        break;
++        
++        case OMTCodec_P216:case OMTCodec_PA16:
++            st->codecpar->format        = AV_PIX_FMT_YUV422P10LE;
++            st->codecpar->codec_tag     = MKTAG('Y', '3', 10 , 10);
++            st->codecpar->bits_per_coded_sample = 16;
++            st->codecpar->bits_per_raw_sample = 16;
++            if (OMTCodec_PA16 == v->Codec)
++                av_log(avctx, AV_LOG_WARNING, "Alpha channel ignored\n");
++        break;
++        default:
++            av_log(avctx, AV_LOG_ERROR, "Unsupported video stream format, v->Codec=%d\n", v->Codec);
++            return AVERROR(EINVAL);
++        break;
++      }
++    
++    avpriv_set_pts_info(st, 64, 1, OMT_TIME_BASE);
++
++    ctx->video_st = st;
++
++    return 0;
++}
++
++static int omt_create_audio_stream(AVFormatContext *avctx, OMTMediaFrame *a)
++{
++    av_log(avctx, AV_LOG_DEBUG, "omt_create_audio_stream \n");
++
++    AVStream *st;
++    struct OMTContext *ctx = (struct OMTContext *)avctx->priv_data;
++    st = avformat_new_stream(avctx, NULL);
++    if (!st) {
++        av_log(avctx, AV_LOG_ERROR, "Cannot add audio stream\n");
++        return AVERROR(ENOMEM);
++    }
++
++    st->codecpar->codec_type        = AVMEDIA_TYPE_AUDIO;
++    st->codecpar->codec_id          = AV_CODEC_ID_PCM_S16LE;
++    st->codecpar->sample_rate       = a->SampleRate;
++    av_channel_layout_default(&st->codecpar->ch_layout, a->Channels);
++
++    avpriv_set_pts_info(st, 64, 1, OMT_TIME_BASE);
++
++    ctx->audio_st = st;
++
++    return 0;
++}
++
++static int omt_read_packet(AVFormatContext *avctx, AVPacket *pkt)
++{
++    av_log(avctx, AV_LOG_DEBUG, "omt_read_packet \n");
++
++    int ret = 0;
++    struct OMTContext *ctx = (struct OMTContext *)avctx->priv_data;
++    OMTMediaFrame * theOMTFrame;
++    OMTFrameType t = OMTFrameType_None;
++
++    theOMTFrame = omt_receive(ctx->recv, (OMTFrameType) (OMTFrameType_Video|OMTFrameType_Audio|OMTFrameType_Metadata), 40);
++    if (theOMTFrame)  {
++        t = theOMTFrame->Type;
++    }
++    
++    switch (t)
++    {
++        case OMTFrameType_Video:
++        
++             av_log(avctx, AV_LOG_DEBUG, "omt_received video\n");
++
++            if (!ctx->video_st)
++                ret = omt_create_video_stream(avctx, theOMTFrame);
++            if (!ret)
++                ret = omt_set_video_packet(avctx, theOMTFrame, pkt);
++                
++            if (ctx->nativevmx)  {
++                av_log(avctx, AV_LOG_DEBUG, "Compressed Data RECVD %d bytes\n", theOMTFrame->CompressedLength);
++                for (int i=0;i<64;i++)
++                {
++                    av_log(avctx, AV_LOG_DEBUG, "%02x ",((uint8_t*)(theOMTFrame->CompressedData))[i]);
++                }
++                av_log(avctx, AV_LOG_DEBUG, "\n");
++            }
++
++        break;
++        
++        case OMTFrameType_Audio:
++             av_log(avctx, AV_LOG_DEBUG, "omt_received audio\n");
++            if (!ctx->audio_st)
++                ret = omt_create_audio_stream(avctx, theOMTFrame);
++            if (!ret)
++                ret = omt_set_audio_packet(avctx, theOMTFrame, pkt);
++        break;
++    
++        case OMTFrameType_Metadata:
++            av_log(avctx, AV_LOG_DEBUG, "omt_received metadata\n");
++            ret = AVERROR(EAGAIN);
++        break;
++        
++        case OMTFrameType_None: default:
++            av_log(avctx, AV_LOG_DEBUG, "omt_received none, skipping\n");
++            ret = AVERROR(EAGAIN);
++        break;
++    }
++    
++    return ret;
++}
++
++
++static int omt_read_close(AVFormatContext *avctx)
++{
++    av_log(avctx, AV_LOG_DEBUG, "omt_read_close \n");
++    struct OMTContext *ctx = (struct OMTContext *)avctx->priv_data;
++    if (ctx->recv)
++        omt_receive_destroy(ctx->recv);
++
++    return 0;
++}
++
++
++#define OFFSET(x) offsetof(struct OMTContext, x)
++#define DEC AV_OPT_FLAG_DECODING_PARAM
++
++static const AVOption options[] = {
++    { "find_sources", "Find available sources"  , OFFSET(find_sources), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, DEC },
++    { "tenbit", "Decode into 10-bit if possible"  , OFFSET(tenbit), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, DEC },
++    { "reference_level", "The audio reference level as floating point full scale deflection", OFFSET(reference_level), AV_OPT_TYPE_FLOAT, { .dbl = 1.0 }, 0.0, 20.0, DEC },
++    { "nativevmx", "Ingest native VMX"  , OFFSET(nativevmx), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, DEC },
++    { NULL },
++};
++
++
++
++static const AVClass libomt_demuxer_class = {
++    .class_name = "OMT demuxer",
++    .item_name  = av_default_item_name,
++    .option     = options,
++    .version    = LIBAVUTIL_VERSION_INT,
++    .category   = AV_CLASS_CATEGORY_DEVICE_VIDEO_INPUT,
++};
++
++
++#if LIBAVDEVICE_VERSION_MAJOR >= 62
++
++    const FFInputFormat ff_libomt_demuxer = {
++        .p.name          = "libomt",
++        .p.long_name     = NULL_IF_CONFIG_SMALL("OpenMediaTransport(OMT) input using libomt library"),
++        .p.priv_class     = &libomt_demuxer_class,
++        .p.flags          = AVFMT_NOFILE,
++        .priv_data_size = sizeof(struct OMTContext),
++        .read_header      = omt_read_header,    
++        .read_packet      = omt_read_packet,
++        .read_close       = omt_read_close,
++    };
++
++#else
++
++    const AVInputFormat ff_libomt_demuxer = {
++        .name          = "libomt",
++        .long_name     = NULL_IF_CONFIG_SMALL("OpenMediaTransport(OMT) input using libomt library"),
++        .priv_class    = &libomt_demuxer_class,
++        .flags         = AVFMT_NOFILE,
++        .priv_data_size = sizeof(struct OMTContext),
++        .read_header   = omt_read_header,
++        .read_packet   = omt_read_packet,
++        .read_close    = omt_read_close,
++    };
++
++#endif
++
++
+diff --git a/libavdevice/libomt_enc.c b/libavdevice/libomt_enc.c
+new file mode 100644
+index 0000000000..b75bf8fddd
+--- /dev/null
++++ b/libavdevice/libomt_enc.c
+@@ -0,0 +1,629 @@
++/*
++ * libOMT muxer
++ * Copyright (c) 2025 Open Media Transport Contributors <omt@gallery.co.uk>
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include <unistd.h>
++
++#include "libavformat/avformat.h"
++#include "libavformat/internal.h"
++#include "libavutil/opt.h"
++#include "libavutil/imgutils.h"
++#include "libavutil/log.h"   
++#include "libavutil/frame.h"
++#include "libavutil/mem.h"
++#include "libavutil/channel_layout.h"
++#include "libavutil/internal.h"
++#include "libavutil/frame.h"
++#include "libavutil/internal.h"
++#include "libavutil/time.h"
++#include "libavformat/internal.h"
++#include "libavformat/mux.h"
++#include "avdevice.h"
++#include "libavdevice/version.h"
++
++#include "libomt_common.h"
++
++
++struct OMTContext {
++    const AVClass *class;  // MUST be first field for AVOptions!
++ //   void *ctx;
++    float reference_level;
++    int clock_output;
++    //int tenbit;
++    OMTMediaFrame video; 
++    OMTMediaFrame audio;
++    float * floataudio;
++    omt_send_t * omt_send;
++    uint8_t * uyvyflip[2];
++    int whichFlipBuff;
++    struct AVFrame *last_avframe;
++};
++
++
++
++static int omt_write_trailer(AVFormatContext *avctx)
++{
++     av_log(avctx, AV_LOG_DEBUG, "omt_write_trailer.\n");
++
++    struct OMTContext *ctx = (struct OMTContext *)avctx->priv_data;
++    
++    if (ctx->omt_send) {
++        omt_send_destroy(ctx->omt_send);
++        if(ctx->last_avframe)
++            av_frame_free(&ctx->last_avframe);
++    }
++    
++    if (ctx->floataudio) {
++        av_free(ctx->floataudio);
++        ctx->floataudio = 0;
++    }
++ 
++    if (ctx->uyvyflip[0]) {
++        av_free(ctx->uyvyflip[0]);
++        ctx->uyvyflip[0] = 0;
++    }
++    if (ctx->uyvyflip[1]) {
++        av_free(ctx->uyvyflip[1]);
++        ctx->uyvyflip[1] = 0;
++    }
++ 
++    return 0;
++}
++
++
++static int dumpOMTMediaFrameInfo(AVFormatContext *avctx,OMTMediaFrame * video)
++{
++    av_log(avctx, AV_LOG_DEBUG, "dumpOMTMediaFrameInfo OMTMediaFrame = %llu\n",(unsigned long long)video);
++    if (video)  {
++        if (video->Type == OMTFrameType_Video)  {
++                av_log(avctx, AV_LOG_DEBUG, "VIDEO FRAME:\n");
++                av_log(avctx, AV_LOG_DEBUG, "Timestamp=%llu\n",(unsigned long long) video->Timestamp);
++                av_log(avctx, AV_LOG_DEBUG, "Codec=%d\n", video->Codec);
++                av_log(avctx, AV_LOG_DEBUG, "Width=%d\n", video->Width);
++                av_log(avctx, AV_LOG_DEBUG, "Height=%d\n", video->Height);
++                av_log(avctx, AV_LOG_DEBUG, "Stride=%d\n", video->Stride);
++                av_log(avctx, AV_LOG_DEBUG, "Flags=%d\n", video->Flags);
++                av_log(avctx, AV_LOG_DEBUG, "FrameRateN=%d\n", video->FrameRateN);
++                av_log(avctx, AV_LOG_DEBUG, "FrameRateD=%d\n", video->FrameRateD);
++                av_log(avctx, AV_LOG_DEBUG, "AspectRatio=%.2f\n", video->AspectRatio);
++                av_log(avctx, AV_LOG_DEBUG, "ColorSpace=%d\n", video->ColorSpace);
++                av_log(avctx, AV_LOG_DEBUG, "Data=%llu\n", (unsigned long long)video->Data);
++                av_log(avctx, AV_LOG_DEBUG, "DataLength=%d\n", video->DataLength);
++                av_log(avctx, AV_LOG_DEBUG, "CompressedData=%llu\n",(unsigned long long) video->CompressedData);
++                av_log(avctx, AV_LOG_DEBUG, "CompressedLength=%llu\n", (unsigned long long)video->CompressedLength);
++                av_log(avctx, AV_LOG_DEBUG, "FrameMetadata=%llu\n", (unsigned long long)video->FrameMetadata);
++                av_log(avctx, AV_LOG_DEBUG, "FrameMetadataLength=%llu\n", (unsigned long long)video->FrameMetadataLength);
++        }
++        
++        if (video->Type ==  OMTFrameType_Audio) {
++                av_log(avctx, AV_LOG_DEBUG, "AUDIO FRAME:\n");
++                av_log(avctx, AV_LOG_DEBUG, "Timestamp=%llu\n", (unsigned long long)video->Timestamp);
++                av_log(avctx, AV_LOG_DEBUG, "Codec=%d\n", video->Codec);
++                av_log(avctx, AV_LOG_DEBUG, "Flags=%d\n", video->Flags);
++                av_log(avctx, AV_LOG_DEBUG, "SampleRate=%d\n", video->SampleRate);
++                av_log(avctx, AV_LOG_DEBUG, "Channels=%d\n", video->Channels);
++                av_log(avctx, AV_LOG_DEBUG, "SamplesPerChannel=%d\n", video->SamplesPerChannel);
++                av_log(avctx, AV_LOG_DEBUG, "Data=%llu\n", (unsigned long long)video->Data);
++                av_log(avctx, AV_LOG_DEBUG, "DataLength=%d\n", video->DataLength);
++                av_log(avctx, AV_LOG_DEBUG, "CompressedData=%llu\n", (unsigned long long)video->CompressedData);
++                av_log(avctx, AV_LOG_DEBUG, "CompressedLength=%llu\n",(unsigned long long) video->CompressedLength);
++                av_log(avctx, AV_LOG_DEBUG, "FrameMetadata=%llu\n", (unsigned long long)video->FrameMetadata);
++                av_log(avctx, AV_LOG_DEBUG, "FrameMetadataLength=%llu\n", (unsigned long long)video->FrameMetadataLength);
++        }
++    }
++    return 0;
++}
++
++
++static void convert_yuv422p10le_to_p216_PAD 
++(
++    uint16_t* src_y, int linesizeY, uint16_t* src_cb,  int linesizeU, uint16_t* src_cr, int linesizeV,
++    uint16_t* dst_p216,  int linesizeP216,
++    int width, int height)
++    {
++        uint16_t* dst_p216local = dst_p216;
++        uint16_t* localY = src_y;
++        uint16_t* localCB = src_cb;
++        uint16_t* localCR = src_cr;
++        uint16_t* dst_p216UVlocal =  (uint16_t*)((uint8_t*)dst_p216 + (height * linesizeY));  
++            
++        // is yuv422p10le 10bit packed ?  need to use 40 bit blocks (5 bytes for 4 pixels)
++        for (int y = 0; y < height >> 1 ; y++) {
++            for (int x = 0; x < width *2; x += 2) {
++                // Load 2 pixels worth of YUV422P10LE data
++                // Pack the data into the P216 format
++                 dst_p216local[x] = localY[x] << 6;
++                 dst_p216local[x + 1] = localY[x + 1]<< 6;
++                 dst_p216UVlocal[x] = localCB[x / 2] << 6 ;
++                 dst_p216UVlocal[x + 1] = localCR[x / 2] << 6;
++            }
++
++            // Advance the pointers in bytes for each line
++            localY += linesizeY;
++            localCB += linesizeU;
++            localCR += linesizeV;
++            dst_p216local += linesizeP216;
++            dst_p216UVlocal += linesizeP216;
++        } 
++        return;   
++    }
++    
++
++static int omt_write_video_packet(AVFormatContext *avctx, AVStream *st, AVPacket *pkt)
++{
++    av_log(avctx, AV_LOG_DEBUG, "omt_write_video_packet START.\n");
++    
++    int frameIsTenBitPlanar = 0;
++    struct OMTContext *ctx = (struct OMTContext *)avctx->priv_data;
++
++    if (st->codecpar->codec_id == AV_CODEC_ID_VMIX) {
++        ctx->video.Codec = OMTCodec_VMX1;
++        ctx->video.Width = st->codecpar->width;
++        ctx->video.Height = st->codecpar->height;
++        ctx->video.FrameRateN = st->avg_frame_rate.num;
++        ctx->video.FrameRateD = st->avg_frame_rate.den;
++        if (st->codecpar->field_order != AV_FIELD_PROGRESSIVE)  
++            ctx->video.Flags = OMTVideoFlags_Interlaced;
++        else
++             ctx->video.Flags = OMTVideoFlags_None;
++        
++        if (st->sample_aspect_ratio.num) {
++            AVRational display_aspect_ratio;
++            av_reduce(&display_aspect_ratio.num, &display_aspect_ratio.den,
++                      st->codecpar->width  * (int64_t)st->sample_aspect_ratio.num,
++                      st->codecpar->height * (int64_t)st->sample_aspect_ratio.den,
++                      1024 * 1024);
++            ctx->video.AspectRatio = av_q2d(display_aspect_ratio);
++        }
++        else
++            ctx->video.AspectRatio = (double)st->codecpar->width/st->codecpar->height;
++
++        ctx->video.ColorSpace = OMTColorSpace_BT709;
++        ctx->video.FrameMetadata = NULL;
++        ctx->video.FrameMetadataLength = 0 ;
++        ctx->video.Timestamp = av_rescale_q(pkt->pts, st->time_base, OMT_TIME_BASE_Q);
++        ctx->video.Type = OMTFrameType_Video;
++        ctx->video.Codec = OMTCodec_VMX1;
++        ctx->video.Stride = 0; 
++        ctx->video.Data = pkt->data;
++        ctx->video.DataLength = pkt->size;
++        ctx->video.CompressedData = NULL;
++        ctx->video.CompressedLength = 0;
++ 
++        av_log(avctx, AV_LOG_DEBUG, "%s: pkt->pts=%"PRId64", timecode=%"PRId64", st->time_base=%d/%d\n",
++            __func__, pkt->pts, ctx->video.Timestamp, st->time_base.num, st->time_base.den);
++
++
++        if (ctx->clock_output == 1) 
++            ctx->video.Timestamp = -1;
++      
++           
++        av_log(avctx, AV_LOG_DEBUG, "omt_send native\n");
++    
++        dumpOMTMediaFrameInfo(avctx,&ctx->video);
++        omt_send(ctx->omt_send, &ctx->video);
++    
++        ctx->last_avframe = NULL;
++        
++        av_log(avctx, AV_LOG_DEBUG, "Compressed Data SENT %d bytes\n", ctx->video.CompressedLength);
++        for (int i=0;i<64;i++) {
++            av_log(avctx, AV_LOG_DEBUG, "%02x ",((uint8_t*)(ctx->video.Data))[i]);
++        }
++        av_log(avctx, AV_LOG_DEBUG, "\n");
++
++    }
++    else  {
++        AVFrame *avframe, *tmp = (AVFrame *)pkt->data;
++        switch(tmp->format) 
++        {
++            case AV_PIX_FMT_YUV422P10LE:
++                ctx->video.Codec = OMTCodec_P216;
++                frameIsTenBitPlanar = 1;
++            break;
++            case AV_PIX_FMT_UYVY422:
++                ctx->video.Codec = OMTCodec_UYVY;
++            break;
++            case AV_PIX_FMT_BGRA:
++                ctx->video.Codec = OMTCodec_BGRA;
++            break;
++         }
++
++        ctx->video.Width = tmp->width;
++        ctx->video.Height = tmp->height;
++        ctx->video.FrameRateN = st->avg_frame_rate.num;
++        ctx->video.FrameRateD = st->avg_frame_rate.den;
++    
++        if (st->codecpar->field_order != AV_FIELD_PROGRESSIVE)
++           ctx->video.Flags = OMTVideoFlags_Interlaced;
++      
++    
++        if (st->sample_aspect_ratio.num) {
++            AVRational display_aspect_ratio;
++            av_reduce(&display_aspect_ratio.num, &display_aspect_ratio.den,
++                      st->codecpar->width  * (int64_t)st->sample_aspect_ratio.num,
++                      st->codecpar->height * (int64_t)st->sample_aspect_ratio.den,
++                      1024 * 1024);
++            ctx->video.AspectRatio = av_q2d(display_aspect_ratio);
++        }
++        else
++            ctx->video.AspectRatio = (double)st->codecpar->width/st->codecpar->height;
++
++        ctx->video.ColorSpace = OMTColorSpace_BT709;
++        ctx->video.CompressedData = NULL;
++        ctx->video.CompressedLength = 0;
++        ctx->video.FrameMetadata = NULL;
++        ctx->video.FrameMetadataLength =0 ;
++        
++         if (tmp->format != AV_PIX_FMT_UYVY422 && tmp->format != AV_PIX_FMT_BGRA && tmp->format !=AV_PIX_FMT_YUV422P10LE) {
++            av_log(avctx, AV_LOG_ERROR, "Got a frame with invalid pixel format.\n");
++            return AVERROR(EINVAL);
++         }
++    
++         if (tmp->linesize[0] < 0) {
++            av_log(avctx, AV_LOG_ERROR, "Got a frame with negative linesize.\n");
++            return AVERROR(EINVAL);
++         }
++        
++
++        if (tmp->width  != ctx->video.Width || tmp->height != ctx->video.Height) {
++            av_log(avctx, AV_LOG_ERROR, "Got a frame with invalid dimension.\n");
++            av_log(avctx, AV_LOG_ERROR, "tmp->width=%d, tmp->height=%d, ctx->video.Width=%d, ctx->video.Height=%d\n",
++                tmp->width, tmp->height, ctx->video.Width, ctx->video.Height);
++            return AVERROR(EINVAL);
++        }
++
++        avframe = av_frame_clone(tmp);
++        if (!avframe)
++            return AVERROR(ENOMEM);
++
++        ctx->video.Timestamp = av_rescale_q(pkt->pts, st->time_base, OMT_TIME_BASE_Q);
++        ctx->video.Type = OMTFrameType_Video;
++        ctx->video.Stride = avframe->linesize[0]; // is this still correct with P216 ?
++        ctx->video.DataLength = ctx->video.Stride * ctx->video.Height;    
++            
++        if (frameIsTenBitPlanar) {
++            convert_yuv422p10le_to_p216_PAD ((uint16_t*)avframe->data[0],avframe->linesize[0], (uint16_t*)avframe->data[1],avframe->linesize[1], ( uint16_t*)avframe->data[2], avframe->linesize[2],
++            (uint16_t*)(ctx->uyvyflip[ctx->whichFlipBuff]),ctx->video.Stride,ctx->video.Width, ctx->video.Height);
++            ctx->video.Data  = (void *)ctx->uyvyflip[ctx->whichFlipBuff];
++            ctx->whichFlipBuff = !ctx->whichFlipBuff;
++        }
++        else
++             ctx->video.Data = (void *)(avframe->data[0]); 
++    
++        av_log(avctx, AV_LOG_DEBUG, "%s: pkt->pts=%"PRId64", timecode=%"PRId64", st->time_base=%d/%d\n",
++            __func__, pkt->pts, ctx->video.Timestamp, st->time_base.num, st->time_base.den);
++
++        if (ctx->clock_output == 1)
++            ctx->video.Timestamp = -1;
++           
++        av_log(avctx, AV_LOG_DEBUG, "omt_send \n");
++    
++        dumpOMTMediaFrameInfo(avctx,&ctx->video);
++        omt_send(ctx->omt_send, &ctx->video);
++    
++        av_frame_free(&ctx->last_avframe);
++        ctx->last_avframe = avframe;
++    }
++    return 0;
++}
++
++/*
++Convert interleaved int16_t (in a uint8_t buffer) to planar float (per-channel contiguous).
++'interleaveShortData' is interleaved shorts (uint8_t * pointing to int16_t data).
++'planarFloatData' is planar float (per channel, NSamples per channel).
++Returns number of output floats written (should be sourceChannels*sourceSamplesPerChannel).
++*/
++static int convertInterleavedShortsToPlanarFloat(uint8_t *interleaveShortData,
++                                                   int sourceChannels,
++                                                   int sourceSamplesPerChannel,
++                                                   float *planarFloatData,
++                                                   float referenceLevel)
++{
++    const int16_t *in = (const int16_t *)interleaveShortData;
++    int totalSamples = sourceChannels * sourceSamplesPerChannel;
++    for (int sampleIdx = 0; sampleIdx < sourceSamplesPerChannel; ++sampleIdx) {
++        for (int ch = 0; ch < sourceChannels; ++ch) {
++            // Interleaved order: [ch0sam0][ch1sam0]...[chNsam0][ch0sam1]...
++            int srcIdx = sampleIdx * sourceChannels + ch;
++            int16_t sample = in[srcIdx];
++            // Convert int16 sample to float in [-1,1],
++            // then rescale by referenceLevel. (referenceLevel==1.0f: full range.)
++            float val = (float)sample / 32767.0f * referenceLevel;
++            // Planar output index
++            int dstIdx = ch * sourceSamplesPerChannel + sampleIdx;
++            planarFloatData[dstIdx] = val;
++        }
++    }
++    return totalSamples; // number of floats written
++}
++
++
++static int omt_write_audio_packet(AVFormatContext *avctx, AVStream *st, AVPacket *pkt)
++{
++    struct OMTContext *ctx = (struct OMTContext *)avctx->priv_data;
++    ctx->audio.Type = OMTFrameType_Audio;
++    ctx->audio.Timestamp = av_rescale_q(pkt->pts, st->time_base, OMT_TIME_BASE_Q);
++    ctx->audio.SamplesPerChannel = pkt->size / (ctx->audio.Channels << 1);
++    ctx->audio.DataLength = sizeof(float) * convertInterleavedShortsToPlanarFloat((uint8_t *)pkt->data, ctx->audio.Channels, ctx->audio.SamplesPerChannel, ctx->floataudio,ctx->reference_level);
++    ctx->audio.Data = (short *)ctx->floataudio;
++
++    av_log(avctx, AV_LOG_DEBUG, "%s: pkt->pts=%"PRId64", timecode=%"PRId64", st->time_base=%d/%d\n",
++        __func__, pkt->pts, ctx->audio.Timestamp, st->time_base.num, st->time_base.den);
++
++    if (ctx->clock_output == 1)
++         ctx->audio.Timestamp = -1;
++
++    omt_send(ctx->omt_send,&ctx->audio);
++
++    return 0;
++}
++
++static int omt_write_packet(AVFormatContext *avctx, AVPacket *pkt)
++{
++
++    av_log(avctx, AV_LOG_DEBUG, "omt_write_packet.\n");
++    AVStream *st = avctx->streams[pkt->stream_index];
++    
++    if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
++        return omt_write_video_packet(avctx, st, pkt);
++    else if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
++        return omt_write_audio_packet(avctx, st, pkt);
++
++    return AVERROR_BUG;
++}
++
++
++static int count_channels_from_mask(const AVChannelLayout *ch_layout) {
++    int count = 0;
++    uint64_t mask = ch_layout->u.mask;
++
++    while (mask) {
++        if (mask & 1)
++            count++;
++        mask >>= 1;
++    }
++    return count;
++}
++
++
++
++static int omt_setup_audio(AVFormatContext *avctx, AVStream *st)
++{
++    av_log(avctx, AV_LOG_DEBUG, "omt_setup_audio.\n");
++    
++    struct OMTContext *ctx = (struct OMTContext *)avctx->priv_data;
++    AVCodecParameters *c = st->codecpar;
++
++    if (ctx->audio.Type != 0) {
++        av_log(avctx, AV_LOG_ERROR, "Only one audio stream is supported!\n");
++        return AVERROR(EINVAL);
++    }
++
++    memset(&ctx->audio,0,sizeof(ctx->audio));
++
++    ctx->audio.SampleRate = c->sample_rate;
++    ctx->audio.Channels = count_channels_from_mask(&c->ch_layout);
++
++    // buffer for conversion from int to float
++    ctx->floataudio = (float *)av_malloc(6144000); // 1/2 second at 32ch floats
++
++    ctx->audio.CompressedData = NULL;
++    ctx->audio.CompressedLength = 0;
++    ctx->audio.FrameMetadata = NULL;
++    ctx->audio.FrameMetadataLength =0 ;
++    
++    avpriv_set_pts_info(st, 64, 1, OMT_TIME_BASE);
++
++    av_log(avctx, AV_LOG_DEBUG, "omt_setup_audio completed\n");
++
++    return 0;
++}
++
++static int omt_setup_video(AVFormatContext *avctx, AVStream *st)
++{
++    av_log(avctx, AV_LOG_DEBUG, "omt_setup_video avctx->priv_data=%llu\n", (unsigned long long) avctx->priv_data);
++
++    struct OMTContext *ctx = (struct OMTContext *)avctx->priv_data;
++    AVCodecParameters *c = st->codecpar;
++
++    if (ctx->video.Type != 0) {
++        av_log(avctx, AV_LOG_ERROR, "Only one video stream is supported!\n");
++        return AVERROR(EINVAL);
++    }
++    
++    if (c->codec_id == AV_CODEC_ID_VMIX) {
++        // native VMX pass through
++        av_log(avctx, AV_LOG_DEBUG, "native VMX pass arrived OMT encoder\n");
++        if (c->format == AV_PIX_FMT_YUV422P)
++            av_log(avctx, AV_LOG_DEBUG, "AV_PIX_FMT_YUV422P format VMX\n");
++    }
++    else
++    {
++        if (c->codec_id != AV_CODEC_ID_WRAPPED_AVFRAME) {
++            av_log(avctx, AV_LOG_ERROR, "Unsupported codec format! (%d)"
++                   " Only AV_CODEC_ID_WRAPPED_AVFRAME is supported (-vcodec wrapped_avframe).\n",c->codec_id);
++            return AVERROR(EINVAL);
++        }
++        
++        if (c->format != AV_PIX_FMT_UYVY422 && c->format != AV_PIX_FMT_BGRA && c->format != AV_PIX_FMT_YUV422P10LE) {
++                av_log(avctx, AV_LOG_ERROR, "Unsupported pixel format! (%d)"
++               " Only AV_PIX_FMT_UYVY422, AV_PIX_FMT_BGRA, AV_PIX_FMT_YUV422P10LE is supported.\n",c->format);
++                return AVERROR(EINVAL);
++        }
++    }
++
++    if (c->field_order == AV_FIELD_BB || c->field_order == AV_FIELD_BT) {
++        av_log(avctx, AV_LOG_ERROR, "Lower field-first disallowed");
++        return AVERROR(EINVAL);
++    }
++
++    memset(&ctx->video,0,sizeof(ctx->video));
++
++    switch(c->format) 
++    {
++        case  AV_PIX_FMT_YUV422P:
++            ctx->video.Codec = OMTCodec_UYVY;
++        break;
++            
++        case AV_PIX_FMT_YUV422P10LE:
++            ctx->video.Codec = OMTCodec_P216;
++            ctx->uyvyflip[0] = (uint8_t*)av_malloc(c->width*c->height*8); // in theory 4 should be enough
++            ctx->uyvyflip[1] = (uint8_t*)av_malloc(c->width*c->height*8);
++            ctx->whichFlipBuff = 0;
++        break;
++        
++        case AV_PIX_FMT_UYVY422:
++            ctx->video.Codec = OMTCodec_UYVY;
++        break;
++        
++        case AV_PIX_FMT_BGRA:
++            ctx->video.Codec = OMTCodec_BGRA;
++        break;
++    }
++
++    ctx->video.Width = c->width;
++    ctx->video.Height = c->height;
++    ctx->video.FrameRateN = st->avg_frame_rate.num;
++    ctx->video.FrameRateD = st->avg_frame_rate.den;
++    
++    if (c->field_order != AV_FIELD_PROGRESSIVE)  
++         ctx->video.Flags = OMTVideoFlags_Interlaced;
++
++ 
++    if (st->sample_aspect_ratio.num)  {
++        AVRational display_aspect_ratio;
++        av_reduce(&display_aspect_ratio.num, &display_aspect_ratio.den,
++                  st->codecpar->width  * (int64_t)st->sample_aspect_ratio.num,
++                  st->codecpar->height * (int64_t)st->sample_aspect_ratio.den,
++                  1024 * 1024);
++        ctx->video.AspectRatio = av_q2d(display_aspect_ratio);
++    }
++    else
++        ctx->video.AspectRatio = (double)st->codecpar->width/st->codecpar->height;
++
++    ctx->video.ColorSpace = OMTColorSpace_BT709;
++    ctx->video.CompressedData = NULL;
++    ctx->video.CompressedLength = 0;
++    ctx->video.FrameMetadata = NULL;
++    ctx->video.FrameMetadataLength = 0 ;
++    
++    avpriv_set_pts_info(st, 64, 1, OMT_TIME_BASE);
++
++    av_log(avctx, AV_LOG_DEBUG, "omt_setup_video completed\n");
++
++    return 0;
++}
++
++static int omt_write_header(AVFormatContext *avctx)
++{
++    int ret = 0;
++    unsigned int n;
++    struct OMTContext *ctx = (struct OMTContext *)avctx->priv_data;    
++    
++    av_log(avctx, AV_LOG_DEBUG, "omt_write_header.\n");
++ 
++    /* check if streams compatible */
++    for (n = 0; n < avctx->nb_streams; n++) {
++        AVStream *st = avctx->streams[n];
++        AVCodecParameters *c = st->codecpar;
++        if (c->codec_type == AVMEDIA_TYPE_AUDIO) {
++            if ((ret = omt_setup_audio(avctx, st)))
++                goto error;
++        }
++        else if (c->codec_type == AVMEDIA_TYPE_VIDEO) {
++            if ((ret = omt_setup_video(avctx, st)))
++                goto error;
++        } 
++        else {
++            av_log(avctx, AV_LOG_ERROR, "Unsupported stream type.\n");
++            ret = AVERROR(EINVAL);
++            goto error;
++        }
++    }
++
++    av_log(avctx, AV_LOG_DEBUG, "calling omt_send_create....\n");
++    ctx->omt_send = omt_send_create(avctx->url, OMTQuality_Default);
++    if (!ctx->omt_send) {
++        av_log(avctx, AV_LOG_ERROR, "Failed to create OMT output %s\n", avctx->url);
++        ret = AVERROR_EXTERNAL;
++    }
++    
++     av_log(avctx, AV_LOG_DEBUG, "libomt reference_level = %.2f clock_output = %d\n",ctx->reference_level,ctx->clock_output);
++
++
++error:
++
++    av_log(avctx, AV_LOG_DEBUG, "omt_write_header completed\n");
++
++    return ret;
++}
++
++#define OFFSET(x) offsetof(struct OMTContext, x)
++static const AVOption options[] = {
++    { "clock_output", "These specify whether the output 'clocks' itself"  , OFFSET(clock_output), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, AV_OPT_FLAG_ENCODING_PARAM | AV_OPT_FLAG_VIDEO_PARAM },
++    { "reference_level", "The audio reference level as floating point full scale deflection", OFFSET(reference_level), AV_OPT_TYPE_FLOAT, { .dbl = 1.0 }, 0.0, 20.0, AV_OPT_FLAG_ENCODING_PARAM | AV_OPT_FLAG_AUDIO_PARAM },
++    { NULL },
++};
++
++
++static const AVClass libomt_muxer_class = {
++    .class_name = "OMT muxer",
++    .item_name  = av_default_item_name,
++    .option     = options,
++    .version    = LIBAVUTIL_VERSION_INT,
++    .category   = AV_CLASS_CATEGORY_DEVICE_VIDEO_OUTPUT,
++};
++
++
++#if LIBAVDEVICE_VERSION_MAJOR >= 62
++
++    const FFOutputFormat ff_libomt_muxer = {
++        .p.name           = "libomt",                     
++        .p.long_name      = NULL_IF_CONFIG_SMALL("OpenMediaTransport (OMT) output"),
++        .p.audio_codec    = AV_CODEC_ID_PCM_S16LE,
++        .p.video_codec    = AV_CODEC_ID_WRAPPED_AVFRAME,
++        .p.subtitle_codec = AV_CODEC_ID_NONE,
++        .p.flags          = AVFMT_NOFILE,
++        .priv_data_size   = sizeof(struct OMTContext),
++        .p.priv_class     = &libomt_muxer_class,
++        .write_header     = omt_write_header,
++        .write_packet     = omt_write_packet,
++        .write_trailer    = omt_write_trailer,
++    };
++
++#else
++
++    const AVOutputFormat ff_libomt_muxer = {
++        .name           = "libomt",                     
++        .long_name      = NULL_IF_CONFIG_SMALL("OpenMediaTransport (OMT) output"),
++        .audio_codec    = AV_CODEC_ID_PCM_S16LE,
++        .video_codec    = AV_CODEC_ID_WRAPPED_AVFRAME,
++        .subtitle_codec = AV_CODEC_ID_NONE,
++        .flags          = AVFMT_NOFILE,
++        .priv_data_size = sizeof(struct OMTContext),
++        .priv_class     = &libomt_muxer_class,
++        .write_header   = omt_write_header,
++        .write_packet   = omt_write_packet,
++        .write_trailer  = omt_write_trailer,
++    };
++
++#endif
++
++
+-- 
+2.49.1
+
