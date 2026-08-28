@@ -24,6 +24,7 @@
 #include "libavformat/demux.h"
 #include "libavutil/opt.h"
 #include "libavutil/imgutils.h"
+#include "libavutil/pixdesc.h"
 #include "libavutil/frame.h"
 #include "libavutil/mem.h"
 
@@ -143,7 +144,7 @@ static int ndi_find_sources(AVFormatContext *avctx, const char *name, NDIlib_sou
 static int ndi_read_header(AVFormatContext *avctx)
 {
     int ret;
-    NDIlib_recv_create_v3_t recv_create_desc;
+    NDIlib_recv_create_v3_t recv_create_desc = { .p_ndi_recv_name = NULL };
     const NDIlib_tally_t tally_state = { .on_program = true, .on_preview = false };
     struct NDIContext *ctx = avctx->priv_data;
 
@@ -203,7 +204,6 @@ static int ndi_create_video_stream(AVFormatContext *avctx, NDIlib_video_frame_v2
     st->codecpar->width             = v->xres;
     st->codecpar->height            = v->yres;
     st->codecpar->codec_id          = AV_CODEC_ID_RAWVIDEO;
-    st->codecpar->bit_rate          = av_rescale(v->xres * v->yres * 16, v->frame_rate_N, v->frame_rate_D);
     st->codecpar->field_order       = v->frame_format_type == NDIlib_frame_format_type_progressive
         ? AV_FIELD_PROGRESSIVE : AV_FIELD_TT;
 
@@ -229,6 +229,10 @@ static int ndi_create_video_stream(AVFormatContext *avctx, NDIlib_video_frame_v2
         return AVERROR(EINVAL);
     }
 
+    st->codecpar->bit_rate = av_rescale(v->xres * (int64_t)v->yres *
+        av_get_bits_per_pixel(av_pix_fmt_desc_get(st->codecpar->format)),
+        v->frame_rate_N, v->frame_rate_D);
+
     avpriv_set_pts_info(st, 64, 1, NDI_TIME_BASE);
 
     ctx->video_st = st;
@@ -250,6 +254,7 @@ static int ndi_create_audio_stream(AVFormatContext *avctx, NDIlib_audio_frame_v2
     st->codecpar->codec_type        = AVMEDIA_TYPE_AUDIO;
     st->codecpar->codec_id          = AV_CODEC_ID_PCM_S16LE;
     st->codecpar->sample_rate       = a->sample_rate;
+    st->codecpar->format            = AV_SAMPLE_FMT_S16;
     st->codecpar->ch_layout.nb_channels          = a->no_channels;
 
     avpriv_set_pts_info(st, 64, 1, NDI_TIME_BASE);
@@ -310,6 +315,8 @@ static int ndi_read_close(AVFormatContext *avctx)
 
     if (ctx->ndi_find)
         NDIlib_find_destroy(ctx->ndi_find);
+
+    NDIlib_destroy();
 
     return 0;
 }
